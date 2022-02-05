@@ -1,0 +1,103 @@
+<?php namespace App\Models\Admin;
+
+use CodeIgniter\Model;
+
+use App\Models\Admin\Admin;
+
+class Auth extends Model
+{
+
+    protected $table= 'admin';
+    public $session;
+
+    public function login($data) {
+        $admin=new Admin();
+        $result=$admin->getOne(['email'=>$data['email']]);
+        if($result){
+            if($result['login_attempt']>=LOIGN_MAX_ATTEMPT && $result['login_attempt_time']>(time()-LOIGN_BAN_TIME)){
+                return ['status'=>0,'message'=>'Max login attempt exceed. Please Try after '.ceil((LOIGN_BAN_TIME -(time()-$result['login_attempt_time']))/60).' Minutes'];
+            }
+            if($this->checkPassword($data['password'],$result['password'])){
+                $this->setSession($result);
+                if(isset($data['remember'])){
+                    $this->setCookie($result);
+                }
+                if($result['login_attempt']){
+                    $admin->update($result['id'],[
+                        'login_attempt'=>0
+                    ]);
+                }
+                return ['status'=>1,'message'=>'Login succcess','data'=>$result];
+            }else{
+                $admin->update($result['id'],[
+                    'login_attempt'=>$result['login_attempt']+1,
+                    'login_attempt_time'=>time()
+                ]);
+            }
+        }
+        return ['status'=>0,'message'=>'Email or password is invalid'];
+    }
+
+    public function checkPassword($password,$encryptedPassword) {
+        return ($encryptedPassword==$this->encryptPassword($password));
+    }
+
+    public function encryptPassword($password) {
+        return sha1($password);
+    }
+
+    public function setCookie($data) {
+        helper('text');
+        $auth_token=random_string('alnum', 32);
+        $user=new Admin();
+        $user->update($data['id'],['auth_token'=>$auth_token]);
+        helper('cookie');
+        setCookie(APP_SLUG.'_admin_auth_token',$auth_token,time()+(60*60*24*30));
+    }
+
+    public function setSession($data) {
+        $this->session->set([
+            'admin_id'=>$data['id'],
+        ]);
+    }
+    
+    public function logout() {
+        $this->removeSession();
+    }
+
+    public function removeSession() {
+        $user=new Admin();
+        $user->update(['id'=>$this->id()],['auth_token'=>'']);
+        helper('cookie');
+        delete_cookie(APP_SLUG.'_admin_auth_token');
+        $this->session->set([
+            'admin_id'=>'',
+        ]);
+    }
+
+    public function isGuest() {
+        $user_id=$this->session->get('admin_id');
+        return !empty($user_id)?false:true;
+    }
+
+    public function id() {
+        return $this->session->get('admin_id');
+    }
+
+    public function identity() {
+        if(!$this->isGuest()){
+            return (new Admin())->where(['id'=>$this->id()])->first();
+        }
+    }
+
+    public function genereateToken(){
+        helper('text');
+        return  random_string('alnum', 32) . '_' . time();     
+    }
+
+    public function checkPasswordResetTokenExpired($token){
+        $token=explode('_',$token);
+        $token=@$token[1];
+        return $token<(time()-(10*60));     
+    }
+}
